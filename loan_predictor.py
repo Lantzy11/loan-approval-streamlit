@@ -1,69 +1,72 @@
-"""
-╔══════════════════════════════════════════════════════╗
-║       🏦  Loan Approval Predictor — XGBoost          ║
-║       Trained on Loan_approval_data_2025.csv         ║
-╚══════════════════════════════════════════════════════╝
-
-Run this script AFTER executing the notebook to use the
-trained XGBoost model. It replicates the exact same
-preprocessing pipeline used during training.
-
-Usage:
-    python loan_predictor.py
-"""
-
-import sys
-import os
+import streamlit as st
 import numpy as np
 import pandas as pd
+import joblib
+import os
 
-# ── Terminal colours ───────────────────────────────────────────────────────────
-class C:
-    RESET  = "\033[0m"
-    BOLD   = "\033[1m"
-    DIM    = "\033[2m"
-    GREEN  = "\033[92m"
-    RED    = "\033[91m"
-    YELLOW = "\033[93m"
-    CYAN   = "\033[96m"
-    WHITE  = "\033[97m"
-    BG_GREEN = "\033[42m"
-    BG_RED   = "\033[41m"
-    BG_YELLOW = "\033[43m"
+# ── Page config ───────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Loan Approval Predictor",
+    page_icon="🏦",
+    layout="centered"
+)
 
-def clear(): os.system('cls' if os.name == 'nt' else 'clear')
+# ── Custom CSS ────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap');
 
-def banner():
-    print(f"""
-{C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════════╗
-║          🏦  LOAN APPROVAL PREDICTOR  ·  XGBoost             ║
-║          Trained on Loan Approval 2025 Dataset               ║
-╚══════════════════════════════════════════════════════════════╝{C.RESET}
-""")
+html, body, [class*="css"] { font-family: 'DM Mono', monospace; }
+h1, h2, h3 { font-family: 'Syne', sans-serif !important; }
+.stApp { background-color: #0d0f14; color: #e8e6e0; }
 
-def divider(char="─", width=64):
-    print(f"{C.DIM}{char * width}{C.RESET}")
+.app-header { text-align:center; padding:2.5rem 0 1.5rem; border-bottom:1px solid #1e2330; margin-bottom:2rem; }
+.app-header h1 { font-size:2.2rem; font-weight:800; color:#f0ede6; letter-spacing:-0.03em; margin:0; }
+.app-header p  { color:#5a6070; font-size:0.78rem; margin-top:0.4rem; letter-spacing:0.08em; text-transform:uppercase; }
 
-def section(title):
-    print(f"\n{C.CYAN}{C.BOLD}  {title}{C.RESET}")
-    divider()
+.section-label { font-family:'Syne',sans-serif; font-size:0.7rem; font-weight:700; letter-spacing:0.15em;
+    text-transform:uppercase; color:#4a9eff; margin:1.8rem 0 0.6rem; padding-bottom:0.4rem; border-bottom:1px solid #1e2330; }
 
-def prompt(label, hint=""):
-    hint_str = f" {C.DIM}({hint}){C.RESET}" if hint else ""
-    return input(f"  {C.WHITE}{label}{C.RESET}{hint_str}: ").strip()
+.result-approved { background:linear-gradient(135deg,#0a2818,#0d1f12); border:1px solid #1a5c32;
+    border-left:4px solid #22c55e; border-radius:8px; padding:1.8rem 2rem; margin:1.5rem 0; }
+.result-rejected { background:linear-gradient(135deg,#1f0a0a,#1a0d0d); border:1px solid #5c1a1a;
+    border-left:4px solid #ef4444; border-radius:8px; padding:1.8rem 2rem; margin:1.5rem 0; }
 
-def error(msg):
-    print(f"  {C.RED}✖  {msg}{C.RESET}")
+.result-verdict { font-family:'Syne',sans-serif; font-size:1.9rem; font-weight:800; letter-spacing:-0.02em; margin:0 0 0.3rem; }
+.result-approved .result-verdict { color:#22c55e; }
+.result-rejected .result-verdict { color:#ef4444; }
+.result-prob { font-size:0.82rem; color:#8a8f9a; margin:0; letter-spacing:0.04em; }
 
-def success(msg):
-    print(f"  {C.GREEN}✔  {msg}{C.RESET}")
+.prob-bar-wrap { margin:1.2rem 0 0.4rem; background:#1a1e28; border-radius:4px; height:6px; overflow:hidden; }
+.prob-bar-fill-approved { height:100%; border-radius:4px; background:linear-gradient(90deg,#16a34a,#22c55e); }
+.prob-bar-fill-rejected { height:100%; border-radius:4px; background:linear-gradient(90deg,#b91c1c,#ef4444); }
+.prob-label { display:flex; justify-content:space-between; font-size:0.72rem; color:#5a6070; margin-top:0.3rem; }
 
-# ── Preprocessing — mirrors the notebook pipeline exactly ─────────────────────
+.metric-strip { display:flex; gap:1rem; margin:1.2rem 0 0; }
+.metric-box { flex:1; background:#12151e; border:1px solid #1e2330; border-radius:6px; padding:0.8rem 1rem; text-align:center; }
+.metric-box .val { font-family:'Syne',sans-serif; font-size:1.3rem; font-weight:700; color:#f0ede6; }
+.metric-box .lbl { font-size:0.65rem; color:#5a6070; text-transform:uppercase; letter-spacing:0.08em; margin-top:0.15rem; }
+
+.flag-row { display:flex; align-items:flex-start; gap:0.5rem; font-size:0.8rem;
+    margin:0.35rem 0; padding:0.4rem 0.6rem; border-radius:4px; }
+.flag-danger  { background:#1f0e0e; color:#f87171; }
+.flag-warning { background:#1a1506; color:#fbbf24; }
+.flag-good    { background:#0a1a10; color:#4ade80; }
+
+.stButton > button { background:#4a9eff !important; color:#0d0f14 !important;
+    font-family:'Syne',sans-serif !important; font-weight:700 !important; font-size:0.9rem !important;
+    letter-spacing:0.05em !important; border:none !important; border-radius:6px !important;
+    padding:0.7rem 2.5rem !important; width:100% !important; margin-top:1.2rem !important; }
+.stButton > button:hover { opacity:0.85 !important; }
+
+footer { visibility:hidden; }
+#MainMenu { visibility:hidden; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Preprocessing constants ───────────────────────────────────────────────────
 LOG_COLS = ['annual_income', 'savings_assets', 'current_debt', 'loan_amount']
 CAT_COLS = ['occupation_status', 'product_type', 'loan_intent']
-
-# These are the exact OHE columns produced by pd.get_dummies(..., drop_first=True)
-# on the training set — must match X_train_enc.columns
 TRAIN_COLUMNS = [
     'age', 'annual_income', 'credit_score', 'loan_amount',
     'loan_term', 'interest_rate', 'debt_to_income_ratio',
@@ -78,236 +81,137 @@ TRAIN_COLUMNS = [
 ]
 
 def preprocess(data: dict) -> pd.DataFrame:
-    """Apply the same preprocessing pipeline as the notebook."""
     df = pd.DataFrame([data])
-
-    # 1. Log1p transform skewed features
     for col in LOG_COLS:
         df[col] = np.log1p(df[col])
-
-    # 2. One-hot encode categorical columns
     df = pd.get_dummies(df, columns=CAT_COLS, drop_first=True)
-
-    # 3. Align to training columns (fill any missing OHE cols with 0)
     df = df.reindex(columns=TRAIN_COLUMNS, fill_value=0)
-
     return df
 
-# ── Input helpers ─────────────────────────────────────────────────────────────
-
-def get_float(label, hint="", min_val=None, max_val=None):
-    while True:
-        try:
-            val = float(prompt(label, hint))
-            if min_val is not None and val < min_val:
-                error(f"Must be ≥ {min_val}"); continue
-            if max_val is not None and val > max_val:
-                error(f"Must be ≤ {max_val}"); continue
-            return val
-        except ValueError:
-            error("Please enter a valid number.")
-
-def get_int(label, hint="", min_val=None, max_val=None):
-    while True:
-        try:
-            val = int(prompt(label, hint))
-            if min_val is not None and val < min_val:
-                error(f"Must be ≥ {min_val}"); continue
-            if max_val is not None and val > max_val:
-                error(f"Must be ≤ {max_val}"); continue
-            return val
-        except ValueError:
-            error("Please enter a whole number.")
-
-def get_choice(label, options: list):
-    """Display numbered menu and return chosen value."""
-    print(f"\n  {C.WHITE}{label}{C.RESET}")
-    for i, opt in enumerate(options, 1):
-        print(f"    {C.CYAN}{i}{C.RESET}. {opt}")
-    while True:
-        try:
-            choice = int(prompt("Enter number"))
-            if 1 <= choice <= len(options):
-                return options[choice - 1]
-            error(f"Enter a number between 1 and {len(options)}.")
-        except ValueError:
-            error("Please enter a number.")
-
-def get_binary(label):
-    """Return 1 or 0 for yes/no questions."""
-    while True:
-        val = prompt(label, "y/n").lower()
-        if val in ('y', 'yes', '1'): return 1
-        if val in ('n', 'no',  '0'): return 0
-        error("Enter y or n.")
-
-# ── Collect applicant data ────────────────────────────────────────────────────
-
-def collect_inputs():
-    data = {}
-
-    section("① PERSONAL INFORMATION")
-    data['age'] = get_int("Age", "18–80", 18, 80)
-
-    data['occupation_status'] = get_choice(
-        "Occupation Status",
-        ["Full-Time", "Part-Time", "Self-Employed", "Unemployed"]
-    )
-
-    section("② FINANCIAL PROFILE")
-    data['annual_income']  = get_float("Annual Income (₱ or local currency)", "e.g. 450000", 0)
-    data['savings_assets'] = get_float("Savings & Assets",                    "e.g. 120000", 0)
-    data['current_debt']   = get_float("Current Debt",                        "e.g. 50000",  0)
-    data['credit_score']   = get_int(  "Credit Score",                        "300–850", 300, 850)
-    data['defaults_on_file']   = get_binary("Any defaults on file?")
-    data['derogatory_marks']   = get_int("Number of derogatory marks", "0–10", 0, 10)
-
-    section("③ LOAN DETAILS")
-    data['loan_amount']  = get_float("Loan Amount Requested", "e.g. 200000", 1)
-    data['loan_term']    = get_int(  "Loan Term",             "months, e.g. 36", 1, 360)
-    data['interest_rate']= get_float("Interest Rate (%)",     "e.g. 12.5", 0, 100)
-
-    data['product_type'] = get_choice(
-        "Loan Product Type",
-        ["Home Loan", "Personal Loan", "Student Loan"]
-    )
-    data['loan_intent'] = get_choice(
-        "Loan Purpose / Intent",
-        ["Home Improvement", "Debt Consolidation", "Education",
-         "Medical", "Personal", "Venture"]
-    )
-
-    section("④ DERIVED RATIOS  (auto-calculated)")
-    # Compute ratios — same as notebook features
-    monthly_income  = data['annual_income'] / 12
-    monthly_payment = (data['loan_amount'] * (data['interest_rate']/100/12)) / \
-                      (1 - (1 + data['interest_rate']/100/12) ** (-data['loan_term'])) \
-                      if data['interest_rate'] > 0 else data['loan_amount'] / data['loan_term']
-
-    data['debt_to_income_ratio']  = data['current_debt'] / data['annual_income'] \
-                                    if data['annual_income'] > 0 else 0
-    data['loan_to_income_ratio']  = data['loan_amount']  / data['annual_income'] \
-                                    if data['annual_income'] > 0 else 0
-
-    print(f"\n  {C.DIM}Debt-to-Income Ratio :  {data['debt_to_income_ratio']:.4f}")
-    print(f"  Loan-to-Income Ratio :  {data['loan_to_income_ratio']:.4f}{C.RESET}")
-
-    return data
-
-# ── Result display ─────────────────────────────────────────────────────────────
-
-def show_result(prediction, probability, data):
-    approved   = prediction == 1
-    conf       = probability if approved else (1 - probability)
-    prob_pct   = probability * 100
-
-    print(f"\n{C.BOLD}")
-    divider("═")
-    print(f"  🏦  LOAN DECISION RESULT")
-    divider("═")
-    print(C.RESET)
-
-    if approved:
-        verdict = f"{C.BG_GREEN}{C.BOLD}  ✅  APPROVED  {C.RESET}"
-        conf_color = C.GREEN
-    else:
-        verdict = f"{C.BG_RED}{C.BOLD}  ❌  REJECTED  {C.RESET}"
-        conf_color = C.RED
-
-    print(f"  Verdict      :  {verdict}")
-    print(f"  Approval Prob:  {conf_color}{C.BOLD}{prob_pct:.1f}%{C.RESET}")
-    print(f"  Confidence   :  {conf_color}{conf*100:.1f}%{C.RESET}  ({'HIGH' if conf > 0.8 else 'MODERATE' if conf > 0.6 else 'LOW'})")
-
-    # Risk factors
-    print(f"\n  {C.BOLD}Key factors in this decision:{C.RESET}")
-    flags = []
-    if data['defaults_on_file']:
-        flags.append(f"  {C.RED}⚠  Defaults on file detected{C.RESET}")
-    if data['credit_score'] < 620:
-        flags.append(f"  {C.RED}⚠  Credit score below 620 ({data['credit_score']}){C.RESET}")
-    elif data['credit_score'] >= 700:
-        flags.append(f"  {C.GREEN}✔  Strong credit score ({data['credit_score']}){C.RESET}")
-    dti = data['debt_to_income_ratio']
-    if dti > 0.35:
-        flags.append(f"  {C.RED}⚠  High debt-to-income ratio ({dti:.2f}){C.RESET}")
-    elif dti < 0.25:
-        flags.append(f"  {C.GREEN}✔  Healthy debt-to-income ratio ({dti:.2f}){C.RESET}")
-    if data['derogatory_marks'] > 2:
-        flags.append(f"  {C.YELLOW}⚠  {data['derogatory_marks']} derogatory marks{C.RESET}")
-    if not flags:
-        flags.append(f"  {C.DIM}No major risk flags detected.{C.RESET}")
-
-    for f in flags:
-        print(f)
-
-    divider("═")
-    print(f"  {C.DIM}Model: XGBoost (tuned) · Loan Approval 2025{C.RESET}\n")
-
 # ── Load model ────────────────────────────────────────────────────────────────
-
+@st.cache_resource
 def load_model():
-    """Try to load xgb_model from a saved .pkl, else guide user to export it."""
-    try:
-        import joblib
-        model = joblib.load('xgb_model.pkl')
-        success("XGBoost model loaded from xgb_model.pkl")
-        return model
-    except FileNotFoundError:
-        pass
+    if not os.path.exists('xgb_model.pkl'):
+        return None
+    return joblib.load('xgb_model.pkl')
 
-    # Try pickle
-    try:
-        import pickle
-        with open('xgb_model.pkl', 'rb') as f:
-            model = pickle.load(f)
-        success("XGBoost model loaded.")
-        return model
-    except FileNotFoundError:
-        pass
+model = load_model()
 
-    # Model file not found — guide user
-    print(f"""
-{C.YELLOW}{C.BOLD}  ⚠  xgb_model.pkl not found.{C.RESET}
+# ── Header ────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="app-header">
+    <h1>🏦 Loan Approval Predictor</h1>
+    <p>XGBoost · Loan Approval 2025 Dataset</p>
+</div>
+""", unsafe_allow_html=True)
 
-  Add this cell at the end of your notebook and run it once:
+if model is None:
+    st.error("**xgb_model.pkl not found.** Run Section 20a in the notebook first, then place `xgb_model.pkl` in the same folder as this script.")
+    st.stop()
 
-{C.CYAN}  import joblib
-  joblib.dump(xgb_model, 'xgb_model.pkl')
-  print("✅ Model saved to xgb_model.pkl"){C.RESET}
+# ── Form ──────────────────────────────────────────────────────────────────────
+st.markdown('<div class="section-label">① Personal Information</div>', unsafe_allow_html=True)
+col1, col2 = st.columns(2)
+with col1:
+    age = st.number_input("Age", min_value=18, max_value=80, value=30)
+with col2:
+    occupation_status = st.selectbox("Occupation Status", ["Full-Time", "Part-Time", "Self-Employed", "Unemployed"])
 
-  Then place xgb_model.pkl in the same folder as this script.
-""")
-    sys.exit(1)
+st.markdown('<div class="section-label">② Financial Profile</div>', unsafe_allow_html=True)
+col1, col2 = st.columns(2)
+with col1:
+    annual_income  = st.number_input("Annual Income",    min_value=0.0, value=450000.0, step=1000.0)
+    savings_assets = st.number_input("Savings & Assets", min_value=0.0, value=120000.0, step=1000.0)
+    credit_score   = st.number_input("Credit Score",     min_value=300, max_value=850,  value=680)
+with col2:
+    current_debt     = st.number_input("Current Debt",      min_value=0.0, value=50000.0, step=1000.0)
+    derogatory_marks = st.number_input("Derogatory Marks",  min_value=0,   max_value=10,  value=0)
+    defaults_on_file = st.selectbox("Defaults on File",     ["No", "Yes"])
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
+st.markdown('<div class="section-label">③ Loan Details</div>', unsafe_allow_html=True)
+col1, col2 = st.columns(2)
+with col1:
+    loan_amount   = st.number_input("Loan Amount",        min_value=1.0,  value=200000.0, step=1000.0)
+    loan_term     = st.number_input("Loan Term (months)", min_value=1,    max_value=360,  value=36)
+with col2:
+    interest_rate = st.number_input("Interest Rate (%)", min_value=0.0, max_value=100.0, value=12.5, step=0.1)
+    product_type  = st.selectbox("Loan Product", ["Home Loan", "Personal Loan", "Student Loan"])
 
-def main():
-    clear()
-    banner()
-    print(f"  {C.DIM}This console uses the XGBoost model trained in your notebook.")
-    print(f"  Preprocessing mirrors the notebook pipeline exactly.{C.RESET}\n")
+loan_intent = st.selectbox("Loan Purpose",
+    ["Personal", "Home Improvement", "Debt Consolidation", "Education", "Medical", "Venture"])
 
-    model = load_model()
+# ── Predict ───────────────────────────────────────────────────────────────────
+if st.button("RUN PREDICTION"):
+    dti = current_debt / annual_income if annual_income > 0 else 0
+    lti = loan_amount  / annual_income if annual_income > 0 else 0
 
-    while True:
-        try:
-            data    = collect_inputs()
-            X       = preprocess(data)
-            pred    = model.predict(X)[0]
-            prob    = model.predict_proba(X)[0][1]
-            show_result(pred, prob, data)
+    data = {
+        'age': age, 'annual_income': annual_income, 'credit_score': credit_score,
+        'loan_amount': loan_amount, 'loan_term': loan_term, 'interest_rate': interest_rate,
+        'debt_to_income_ratio': dti, 'loan_to_income_ratio': lti,
+        'savings_assets': savings_assets, 'current_debt': current_debt,
+        'defaults_on_file': 1 if defaults_on_file == "Yes" else 0,
+        'derogatory_marks': derogatory_marks,
+        'occupation_status': occupation_status,
+        'product_type': product_type,
+        'loan_intent': loan_intent,
+    }
 
-        except KeyboardInterrupt:
-            print(f"\n\n  {C.DIM}Exiting. Goodbye.{C.RESET}\n")
-            break
+    X    = preprocess(data)
+    pred = model.predict(X)[0]
+    prob = model.predict_proba(X)[0][1]
+    conf = max(prob, 1 - prob)
+    conf_label = "HIGH" if conf > 0.80 else "MODERATE" if conf > 0.60 else "LOW"
+    approved   = pred == 1
 
-        print(f"\n  {C.CYAN}Run another prediction?{C.RESET}")
-        again = prompt("Enter y to continue, n to exit", "y/n").lower()
-        if again not in ('y', 'yes'):
-            print(f"\n  {C.DIM}Goodbye.{C.RESET}\n")
-            break
-        clear()
-        banner()
+    card_class = "result-approved" if approved else "result-rejected"
+    verdict    = "✅ APPROVED"     if approved else "❌ REJECTED"
+    bar_class  = "prob-bar-fill-approved" if approved else "prob-bar-fill-rejected"
 
-if __name__ == '__main__':
-    main()
+    st.markdown(f"""
+    <div class="{card_class}">
+        <p class="result-verdict">{verdict}</p>
+        <p class="result-prob">Approval probability · {prob*100:.1f}%</p>
+        <div class="prob-bar-wrap">
+            <div class="{bar_class}" style="width:{prob*100:.1f}%"></div>
+        </div>
+        <div class="prob-label"><span>0%</span><span>50%</span><span>100%</span></div>
+        <div class="metric-strip">
+            <div class="metric-box"><div class="val">{prob*100:.1f}%</div><div class="lbl">Approval Prob</div></div>
+            <div class="metric-box"><div class="val">{conf*100:.1f}%</div><div class="lbl">Confidence · {conf_label}</div></div>
+            <div class="metric-box"><div class="val">{dti:.2f}</div><div class="lbl">Debt-to-Income</div></div>
+            <div class="metric-box"><div class="val">{lti:.2f}</div><div class="lbl">Loan-to-Income</div></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="section-label">Risk Factors</div>', unsafe_allow_html=True)
+    flags = []
+    if defaults_on_file == "Yes":
+        flags.append(("danger",  "⚠", "Defaults on file — strong rejection signal"))
+    if credit_score < 620:
+        flags.append(("danger",  "⚠", f"Low credit score ({credit_score}) — below 620 threshold"))
+    elif credit_score >= 700:
+        flags.append(("good",    "✔", f"Strong credit score ({credit_score})"))
+    if dti > 0.35:
+        flags.append(("danger",  "⚠", f"High debt-to-income ratio ({dti:.2f}) — above 0.35"))
+    elif dti < 0.25:
+        flags.append(("good",    "✔", f"Healthy debt-to-income ratio ({dti:.2f})"))
+    else:
+        flags.append(("warning", "·", f"Moderate debt-to-income ratio ({dti:.2f})"))
+    if derogatory_marks > 2:
+        flags.append(("warning", "⚠", f"{derogatory_marks} derogatory marks on record"))
+    if loan_intent == "Debt Consolidation":
+        flags.append(("warning", "·", "Debt Consolidation has the lowest approval rate (36.6%)"))
+    elif loan_intent == "Education":
+        flags.append(("good",    "✔", "Education loans have the highest approval rate (67.5%)"))
+    if not flags:
+        flags.append(("good", "✔", "No major risk flags detected"))
+
+    for kind, icon, msg in flags:
+        st.markdown(f'<div class="flag-row flag-{kind}">{icon}&nbsp;&nbsp;{msg}</div>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <p style="font-size:0.68rem;color:#3a3f4a;margin-top:1.5rem;text-align:center;">
+        Model: XGBoost (tuned via RandomizedSearchCV) &nbsp;·&nbsp; Loan Approval 2025
+    </p>""", unsafe_allow_html=True)
