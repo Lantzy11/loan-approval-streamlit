@@ -13,43 +13,52 @@ st.set_page_config(
 # ── Preprocessing constants ───────────────────────────────────────────────────
 LOG_COLS = ['annual_income', 'savings_assets', 'current_debt', 'loan_amount']
 CAT_COLS = ['occupation_status', 'product_type', 'loan_intent']
-TRAIN_COLUMNS = [
-    'age', 'annual_income', 'credit_score', 'loan_amount',
-    'loan_term', 'interest_rate', 'debt_to_income_ratio',
-    'loan_to_income_ratio', 'savings_assets', 'current_debt',
-    'defaults_on_file', 'derogatory_marks',
-    'occupation_status_Part-Time', 'occupation_status_Self-Employed',
-    'occupation_status_Unemployed',
-    'product_type_Personal Loan', 'product_type_Student Loan',
-    'loan_intent_Debt Consolidation', 'loan_intent_Education',
-    'loan_intent_Home Improvement', 'loan_intent_Medical',
-    'loan_intent_Venture'
-]
 
-def preprocess(data: dict) -> pd.DataFrame:
+def preprocess(data: dict, feature_columns: list) -> pd.DataFrame:
     df = pd.DataFrame([data])
+    # Log transform
     for col in LOG_COLS:
         df[col] = np.log1p(df[col])
+    # One-hot encode
     df = pd.get_dummies(df, columns=CAT_COLS, drop_first=True)
-    df = df.reindex(columns=TRAIN_COLUMNS, fill_value=0)
+    # Align exactly to training columns
+    df = df.reindex(columns=feature_columns, fill_value=0)
     return df
 
-# ── Load model ────────────────────────────────────────────────────────────────
+# ── Load model + feature columns ─────────────────────────────────────────────
 @st.cache_resource
-def load_model():
-    return joblib.load('xgb_model.pkl')
+def load_artifacts():
+    if not os.path.exists('xgb_model.pkl'):
+        return None, None
+    if not os.path.exists('feature_columns.pkl'):
+        return None, None
+    model = joblib.load('xgb_model.pkl')
+    columns = joblib.load('feature_columns.pkl')
+    return model, columns
 
-try:
-    model = load_model()
-except Exception as e:
-    st.error(f"Failed to load model: {e}")
-    st.stop()
+model, feature_columns = load_artifacts()
 
-# ── UI ────────────────────────────────────────────────────────────────────────
+# ── Header ────────────────────────────────────────────────────────────────────
 st.title("🏦 Loan Approval Predictor")
 st.caption("XGBoost · Loan Approval 2025 Dataset")
 st.divider()
 
+if model is None or feature_columns is None:
+    st.error("""
+    **Missing required files.** Make sure both files are in your GitHub repo:
+    - `xgb_model.pkl`
+    - `feature_columns.pkl`
+
+    Run this in your notebook to generate them:
+    ```python
+    import joblib
+    joblib.dump(xgb_model, 'xgb_model.pkl')
+    joblib.dump(list(X_train_enc.columns), 'feature_columns.pkl')
+    ```
+    """)
+    st.stop()
+
+# ── Form ──────────────────────────────────────────────────────────────────────
 st.subheader("① Personal Information")
 col1, col2 = st.columns(2)
 with col1:
@@ -100,46 +109,48 @@ if st.button("RUN PREDICTION", use_container_width=True, type="primary"):
         'loan_intent': loan_intent,
     }
 
-    X    = preprocess(data)
-    pred = model.predict(X)[0]
-    prob = model.predict_proba(X)[0][1]
-    conf = max(prob, 1 - prob)
-    conf_label = "HIGH" if conf > 0.80 else "MODERATE" if conf > 0.60 else "LOW"
+    try:
+        X    = preprocess(data, feature_columns)
+        pred = model.predict(X)[0]
+        prob = model.predict_proba(X)[0][1]
+        conf = max(prob, 1 - prob)
+        conf_label = "HIGH" if conf > 0.80 else "MODERATE" if conf > 0.60 else "LOW"
 
-    # Verdict
-    if pred == 1:
-        st.success(f"## ✅ APPROVED")
-    else:
-        st.error(f"## ❌ REJECTED")
+        if pred == 1:
+            st.success("## ✅ APPROVED")
+        else:
+            st.error("## ❌ REJECTED")
 
-    # Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Approval Prob",    f"{prob*100:.1f}%")
-    col2.metric("Confidence",       f"{conf*100:.1f}% ({conf_label})")
-    col3.metric("Debt-to-Income",   f"{dti:.2f}")
-    col4.metric("Loan-to-Income",   f"{lti:.2f}")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Approval Prob",  f"{prob*100:.1f}%")
+        col2.metric("Confidence",     f"{conf*100:.1f}% ({conf_label})")
+        col3.metric("Debt-to-Income", f"{dti:.2f}")
+        col4.metric("Loan-to-Income", f"{lti:.2f}")
 
-    st.progress(float(prob), text=f"Approval probability: {prob*100:.1f}%")
+        st.progress(float(prob), text=f"Approval probability: {prob*100:.1f}%")
 
-    # Risk flags
-    st.subheader("Risk Factors")
-    if defaults_on_file == "Yes":
-        st.error("⚠ Defaults on file — strong rejection signal")
-    if credit_score < 620:
-        st.error(f"⚠ Low credit score ({credit_score}) — below 620 threshold")
-    elif credit_score >= 700:
-        st.success(f"✔ Strong credit score ({credit_score})")
-    if dti > 0.35:
-        st.error(f"⚠ High debt-to-income ratio ({dti:.2f}) — above 0.35")
-    elif dti < 0.25:
-        st.success(f"✔ Healthy debt-to-income ratio ({dti:.2f})")
-    else:
-        st.warning(f"· Moderate debt-to-income ratio ({dti:.2f})")
-    if derogatory_marks > 2:
-        st.warning(f"⚠ {derogatory_marks} derogatory marks on record")
-    if loan_intent == "Debt Consolidation":
-        st.warning("· Debt Consolidation has the lowest approval rate (36.6%)")
-    elif loan_intent == "Education":
-        st.success("✔ Education loans have the highest approval rate (67.5%)")
+        st.subheader("Risk Factors")
+        if defaults_on_file == "Yes":
+            st.error("⚠ Defaults on file — strong rejection signal")
+        if credit_score < 620:
+            st.error(f"⚠ Low credit score ({credit_score}) — below 620 threshold")
+        elif credit_score >= 700:
+            st.success(f"✔ Strong credit score ({credit_score})")
+        if dti > 0.35:
+            st.error(f"⚠ High debt-to-income ratio ({dti:.2f}) — above 0.35")
+        elif dti < 0.25:
+            st.success(f"✔ Healthy debt-to-income ratio ({dti:.2f})")
+        else:
+            st.warning(f"· Moderate debt-to-income ratio ({dti:.2f})")
+        if derogatory_marks > 2:
+            st.warning(f"⚠ {derogatory_marks} derogatory marks on record")
+        if loan_intent == "Debt Consolidation":
+            st.warning("· Debt Consolidation has the lowest approval rate (36.6%)")
+        elif loan_intent == "Education":
+            st.success("✔ Education loans have the highest approval rate (67.5%)")
 
-    st.caption("Model: XGBoost (tuned via RandomizedSearchCV) · Loan Approval 2025")
+        st.caption("Model: XGBoost (tuned via RandomizedSearchCV) · Loan Approval 2025")
+
+    except Exception as e:
+        st.error(f"Prediction error: {e}")
+        st.info("Check that feature_columns.pkl matches the model's training columns.")
