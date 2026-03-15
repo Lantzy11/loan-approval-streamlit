@@ -16,12 +16,9 @@ CAT_COLS = ['occupation_status', 'product_type', 'loan_intent']
 
 def preprocess(data: dict, feature_columns: list) -> pd.DataFrame:
     df = pd.DataFrame([data])
-    # Log transform
     for col in LOG_COLS:
         df[col] = np.log1p(df[col])
-    # One-hot encode
     df = pd.get_dummies(df, columns=CAT_COLS, drop_first=True)
-    # Align exactly to training columns
     df = df.reindex(columns=feature_columns, fill_value=0)
     return df
 
@@ -32,7 +29,7 @@ def load_artifacts():
         return None, None
     if not os.path.exists('feature_columns.pkl'):
         return None, None
-    model = joblib.load('xgb_model.pkl')
+    model   = joblib.load('xgb_model.pkl')
     columns = joblib.load('feature_columns.pkl')
     return model, columns
 
@@ -45,50 +42,48 @@ st.divider()
 
 if model is None or feature_columns is None:
     st.error("""
-    **Missing required files.** Make sure both files are in your GitHub repo:
+    **Missing required files.** Make sure both are in your GitHub repo:
     - `xgb_model.pkl`
     - `feature_columns.pkl`
-
-    Run this in your notebook to generate them:
-    ```python
-    import joblib
-    joblib.dump(xgb_model, 'xgb_model.pkl')
-    joblib.dump(list(X_train_enc.columns), 'feature_columns.pkl')
-    ```
     """)
     st.stop()
 
 # ── Form ──────────────────────────────────────────────────────────────────────
 st.subheader("① Personal Information")
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
     age = st.number_input("Age", min_value=18, max_value=80, value=30)
 with col2:
-    occupation_status = st.selectbox("Occupation Status",
-        ["Full-Time", "Part-Time", "Self-Employed", "Unemployed"])
+    years_employed = st.number_input("Years Employed", min_value=0, max_value=50, value=5)
+with col3:
+    credit_history_years = st.number_input("Credit History (years)", min_value=0, max_value=50, value=8)
+
+occupation_status = st.selectbox("Occupation Status",
+    ["Full-Time", "Part-Time", "Self-Employed", "Student", "Unemployed"])
 
 st.subheader("② Financial Profile")
 col1, col2 = st.columns(2)
 with col1:
-    annual_income  = st.number_input("Annual Income",    min_value=0.0, value=450000.0, step=1000.0)
-    savings_assets = st.number_input("Savings & Assets", min_value=0.0, value=120000.0, step=1000.0)
-    credit_score   = st.number_input("Credit Score",     min_value=300, max_value=850,  value=680)
+    annual_income        = st.number_input("Annual Income",       min_value=0.0,  value=450000.0, step=1000.0)
+    savings_assets       = st.number_input("Savings & Assets",    min_value=0.0,  value=120000.0, step=1000.0)
+    credit_score         = st.number_input("Credit Score",        min_value=300,  max_value=850,  value=680)
 with col2:
-    current_debt     = st.number_input("Current Debt",     min_value=0.0, value=50000.0, step=1000.0)
-    derogatory_marks = st.number_input("Derogatory Marks", min_value=0,   max_value=10,  value=0)
-    defaults_on_file = st.selectbox("Defaults on File", ["No", "Yes"])
+    current_debt         = st.number_input("Current Debt",        min_value=0.0,  value=50000.0,  step=1000.0)
+    derogatory_marks     = st.number_input("Derogatory Marks",    min_value=0,    max_value=10,   value=0)
+    delinquencies        = st.number_input("Delinquencies (last 2 yrs)", min_value=0, max_value=20, value=0)
+
+defaults_on_file = st.selectbox("Defaults on File", ["No", "Yes"])
 
 st.subheader("③ Loan Details")
 col1, col2 = st.columns(2)
 with col1:
-    loan_amount   = st.number_input("Loan Amount",          min_value=1.0,  value=200000.0, step=1000.0)
-    loan_term     = st.number_input("Loan Term (months)",   min_value=1,    max_value=360,  value=36)
+    loan_amount   = st.number_input("Loan Amount",        min_value=1.0,   value=200000.0, step=1000.0)
+    interest_rate = st.number_input("Interest Rate (%)",  min_value=0.0,   max_value=100.0, value=12.5, step=0.1)
 with col2:
-    interest_rate = st.number_input("Interest Rate (%)",    min_value=0.0,  max_value=100.0, value=12.5, step=0.1)
-    product_type  = st.selectbox("Loan Product", ["Home Loan", "Personal Loan", "Student Loan"])
+    product_type  = st.selectbox("Loan Product", ["Home Loan", "Line of Credit", "Personal Loan"])
 
 loan_intent = st.selectbox("Loan Purpose",
-    ["Personal", "Home Improvement", "Debt Consolidation", "Education", "Medical", "Venture"])
+    ["Home Improvement", "Debt Consolidation", "Education", "Medical", "Personal", "Venture"])
 
 st.divider()
 
@@ -98,15 +93,23 @@ if st.button("RUN PREDICTION", use_container_width=True, type="primary"):
     lti = loan_amount  / annual_income if annual_income > 0 else 0
 
     data = {
-        'age': age, 'annual_income': annual_income, 'credit_score': credit_score,
-        'loan_amount': loan_amount, 'loan_term': loan_term, 'interest_rate': interest_rate,
-        'debt_to_income_ratio': dti, 'loan_to_income_ratio': lti,
-        'savings_assets': savings_assets, 'current_debt': current_debt,
-        'defaults_on_file': 1 if defaults_on_file == "Yes" else 0,
-        'derogatory_marks': derogatory_marks,
-        'occupation_status': occupation_status,
-        'product_type': product_type,
-        'loan_intent': loan_intent,
+        'age':                   age,
+        'years_employed':        years_employed,
+        'annual_income':         annual_income,
+        'credit_score':          credit_score,
+        'credit_history_years':  credit_history_years,
+        'savings_assets':        savings_assets,
+        'current_debt':          current_debt,
+        'defaults_on_file':      1 if defaults_on_file == "Yes" else 0,
+        'delinquencies_last_2yrs': delinquencies,
+        'derogatory_marks':      derogatory_marks,
+        'loan_amount':           loan_amount,
+        'interest_rate':         interest_rate,
+        'debt_to_income_ratio':  dti,
+        'loan_to_income_ratio':  lti,
+        'occupation_status':     occupation_status,
+        'product_type':          product_type,
+        'loan_intent':           loan_intent,
     }
 
     try:
@@ -144,6 +147,8 @@ if st.button("RUN PREDICTION", use_container_width=True, type="primary"):
             st.warning(f"· Moderate debt-to-income ratio ({dti:.2f})")
         if derogatory_marks > 2:
             st.warning(f"⚠ {derogatory_marks} derogatory marks on record")
+        if delinquencies > 0:
+            st.warning(f"⚠ {delinquencies} delinquencies in last 2 years")
         if loan_intent == "Debt Consolidation":
             st.warning("· Debt Consolidation has the lowest approval rate (36.6%)")
         elif loan_intent == "Education":
